@@ -87,17 +87,18 @@ class ProblemSolver:
         coeffs[n + 2] = -alpha_0 * (nu ** 2) * X
         coeffs[2 * n] = X ** 2
 
-        self._parameters = p
+        self._p = p
         self._f = poly1d(coeffs[::-1])
 
     def solve(self, solver: PolynomialSolver, tolerance: float) -> np.ndarray:
         print(self._f)
         z = solver.solve(self._f, tolerance)
+        u_1 = self._p['U_3'] + 2 * self._p['C_3'] * (1 - z) / (self._p['gamma_3'] - 1)
 
-        n = round(2 * self._parameters['gamma_3'] / (self._parameters['gamma_3'] - 1))
-        p_1 = self._parameters['P_3'] * (z ** n)
+        n = round(2 * self._p['gamma_3'] / (self._p['gamma_3'] - 1))
+        p_1 = self._p['P_3'] * (z ** n)
 
-        return p_1
+        return self._p['U_0'] - (self._p['P_0'] - p_1) / (self._p['rho_0'] * (u_1 - self._p['U_0']))
 
 
 if __name__ == '__main__':
