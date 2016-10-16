@@ -1,86 +1,29 @@
+from typing import Tuple, Callable
+
 import numpy as np
 from numpy import poly1d
 
-
-class RootsNumberEstimator:
-    @staticmethod
-    def cartesian(f: poly1d, interval: tuple) -> int:
-        signs = np.array([s for s in np.sign(f.coeffs) if s != 0])
-        return RootsNumberEstimator._count_sign_changes(signs)
-
-    @staticmethod
-    def fourier(f: poly1d, interval: tuple) -> int:
-        a, b = interval
-        n = f.order
-        a_signs = np.array(
-            [s for s in np.sign([f.deriv(i)(a) for i in np.arange(n + 1)]) if s != 0])
-        b_signs = np.array(
-            [s for s in np.sign([f.deriv(i)(b) for i in np.arange(n + 1)]) if s != 0])
-
-        return (RootsNumberEstimator._count_sign_changes(a_signs) -
-                RootsNumberEstimator._count_sign_changes(b_signs))
-
-    @staticmethod
-    def sturm(polynomial: poly1d, interval: tuple) -> int:
-        a, b = interval
-        n = polynomial.order
-        f_sequence = [polynomial, polynomial.deriv()]
-        for i in np.arange(2, n + 1):
-            f_sequence.append(-np.polydiv(f_sequence[i - 2], f_sequence[i - 1])[1])
-
-        a_signs = np.array([s for s in np.sign([f(a) for f in f_sequence]) if s != 0])
-        b_signs = np.array([s for s in np.sign([f(b) for f in f_sequence]) if s != 0])
-        return (RootsNumberEstimator._count_sign_changes(a_signs) -
-                RootsNumberEstimator._count_sign_changes(b_signs))
-
-    @staticmethod
-    def _count_sign_changes(sequence: np.ndarray) -> int:
-        n = 0
-        current_sign = sequence[0]
-        for s in sequence:
-            if s != current_sign:
-                n += 1
-                current_sign = s
-        return n
+import Roots.roots_number_estimators as rne
+import Roots.root_approximators as ra
 
 
-class RootApproximation:
-    @staticmethod
-    def binomial_search(f: poly1d, interval: tuple, tol: float) -> float:
-        a, b = interval
-        c = (a + b) / 2
+class PolynomialSolver:
+    def __init__(self, n_estimator: Callable[[poly1d, Tuple[float, float]], int],
+                 root_approximation: Callable[[poly1d, Tuple[float, float]], float]):
+        self._n_estimator = n_estimator
+        self._root_approximation = root_approximation
 
-        if abs(a - b) < tol:
-            return c
+    def solve(self, f: poly1d, tolerance: float) -> np.ndarray:
+        return self._find_roots(f, self._localize(f, tolerance), tolerance)
 
-        if f(a) * f(c) < 0:
-            return RootApproximation.binomial_search(f, (a, c), tol)
-        elif f(b) * f(c) < 0:
-            return RootApproximation.binomial_search(f, (c, b), tol)
-        else:
-            return c
+    def _localize(self, f: poly1d, tolerance: float):
+        # Поиск границ кольца на котором лежат корни
+        a = abs(f.coeffs[-1]) / (abs(f.coeffs[-1]) + max(f.coeffs[:-1]))
+        b = 1 + max(f.coeffs[1:]) / abs(f.coeffs[0])
+        print('Ring borders: [{0:.3f}, {1:.3f}]'.format(a, b))
 
-
-class Solver:
-    def __init__(self, **kwargs):
-        self._n_estimator = kwargs['n_estimator']
-        self._root_approximation = kwargs['root_approximation']
-        self._tolerance = kwargs['tolerance']
-
-        self._compute_polynomial_approximation()
-
-    def _compute_polynomial_approximation(self):
-        self._f = poly1d([1, -6, 11, -6])
-
-    def solve(self) -> np.ndarray:
-        return self._find_roots(self._f, self._localize())
-
-    def _localize(self):
-        # Choosing ring on which all roots lie
-        a = abs(self._f.coeffs[-1]) / (abs(self._f.coeffs[-1]) + max(self._f.coeffs[:-1]))
-        b = 1 + max(self._f.coeffs[1:]) / abs(self._f.coeffs[0])
-
-        n_plus = self._n_estimator(self._f, (a, b))
+        n_plus = self._n_estimator(f, (a, b))
+        print('Estimated N roots: {}'.format(n_plus))
 
         m = n_plus
 
@@ -88,30 +31,82 @@ class Solver:
             interval = np.linspace(a, b, m)
             n = 0
             for i in np.arange(m - 1):
-                if self._f(interval[i]) * self._f(interval[i + 1]) < 0:
+                if f(interval[i]) * f(interval[i + 1]) < 0:
                     n += 1
             if n == n_plus:
                 return interval
 
             h = (b - a) / m
-            if h < self._tolerance:
+            if h < tolerance:
                 return interval
 
             m *= 2
 
-    def _find_roots(self, f: poly1d, subdivided_interval: np.ndarray):
+    def _find_roots(self, f: poly1d, subdivided_interval: np.ndarray, tolerance: float):
         n_points = subdivided_interval.size
         roots = []
         for i in range(n_points - 1):
             if f(subdivided_interval[i]) * f(subdivided_interval[i + 1]) < 0:
                 roots.append(self._root_approximation(f, (subdivided_interval[i],
                                                           subdivided_interval[i + 1]),
-                                                      self._tolerance))
+                                                      tolerance))
         return np.array(roots)
 
 
+class Parameters:
+    def __init__(self):
+        self._parameters = dict()
+
+    def parse_file(self, in_file_name: str):
+        in_file = open(in_file_name)
+        self._parameters = {s.strip().split('=')[0]: float(s.strip().split('=')[1])
+                            for s in in_file.readlines() if s.strip()}
+
+    def __getitem__(self, item):
+        return self._parameters[item]
+
+
+class ProblemSolver:
+    def __init__(self, p: Parameters):
+        alpha_0 = round((p['gamma_0'] + 1) / (p['gamma_0'] - 1))
+        n = round(2 * p['gamma_3'] / (p['gamma_3'] - 1))
+        mu = ((p['U_3'] - p['U_0']) * np.sqrt(((p['gamma_0'] - 1) * p['rho_0']) / (2 * p['P_0'])))
+
+        # Здесь возможно была ошибка в методичке (стр. 18)
+        nu = 2 * p['C_3'] / (p['gamma_3'] - 1) * np.sqrt(p['rho_0'] *
+                                                         (p['gamma_0'] - 1) / (2 * p['P_0']))
+
+        X = p['P_3'] / p['P_0']
+
+        coeffs = np.zeros(2 * n + 1)
+        coeffs[0] = 1 - (mu + nu) ** 2
+        coeffs[1] = 2 * nu * (mu + nu)
+        coeffs[2] = - (nu ** 2)
+        coeffs[n] = - (2 + alpha_0 * ((mu + nu) ** 2)) * X
+        coeffs[n + 1] = 2 * alpha_0 * nu * (mu + nu) * X
+        coeffs[n + 2] = -alpha_0 * (nu ** 2) * X
+        coeffs[2 * n] = X ** 2
+
+        self._parameters = p
+        self._f = poly1d(coeffs[::-1])
+
+    def solve(self, solver: PolynomialSolver, tolerance: float) -> np.ndarray:
+        print(self._f)
+        z = solver.solve(self._f, tolerance)
+
+        n = round(2 * self._parameters['gamma_3'] / (self._parameters['gamma_3'] - 1))
+        p_1 = self._parameters['P_3'] * (z ** n)
+
+        return p_1
+
+
 if __name__ == '__main__':
-    solver = Solver(n_estimator=RootsNumberEstimator.sturm,
-                    root_approximation=RootApproximation.binomial_search,
-                    tolerance=1e-9)
-    print(solver.solve())
+    parameters = Parameters()
+    parameters.parse_file('parameters.txt')
+
+    solver = PolynomialSolver(rne.sturm,
+                              ra.newton)
+
+    problem_solver = ProblemSolver(parameters)
+    answer = problem_solver.solve(solver, 1e-9)
+    print(answer)
