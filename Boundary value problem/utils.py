@@ -1,5 +1,7 @@
 from typing import Callable
 
+import numpy as np
+
 USUAL_FUNCTION = Callable[[float], float]
 
 
@@ -54,3 +56,40 @@ class PiecewiseFunction:
             return self._fun[0]
         else:
             return self._fun[1]
+
+
+class Grid:
+    """
+    Простая обёртка над одномерным массивом
+    """
+
+    def __init__(self, left, right, n_points):
+        self._grid = np.linspace(left, right, n_points, True)
+        self._h = (right - left) / (n_points - 1)
+
+    def h(self):
+        return self._h
+
+    def find_pos(self, x: float) -> int:
+        """
+        Возвращает положение перед разрывом
+        :param x:
+        :return:
+        """
+        i = 0
+        while self._grid[i] < x:
+            i += 1
+        return i - 1
+
+    def __getitem__(self, i: int) -> float:
+        return self._grid[i]
+
+    def __len__(self) -> int:
+        return self._grid.size
+
+    def __repr__(self) -> str:
+        """
+        Отладочное представление сетки
+        :return: строковое представление
+        """
+        return str(self._grid)

@@ -1,47 +1,10 @@
+from math import exp, sin
 from typing import Tuple
 
-import numpy as np
 import matplotlib.pyplot as plt
-from math import exp, sin
+import numpy as np
 
-from special_functions import PiecewiseFunction, USUAL_FUNCTION, BoundaryConditions
-
-
-class Grid:
-    """
-    Простая обёртка над одномерным массивом
-    """
-
-    def __init__(self, left, right, n_points):
-        self._grid = np.linspace(left, right, n_points, True)
-        self._h = (right - left) / (n_points - 1)
-
-    def h(self):
-        return self._h
-
-    def find_pos(self, x: float) -> int:
-        """
-        Возвращает положение перед разрывом
-        :param x:
-        :return:
-        """
-        i = 0
-        while self._grid[i] < x:
-            i += 1
-        return i - 1
-
-    def __getitem__(self, i: int) -> float:
-        return self._grid[i]
-
-    def __len__(self) -> int:
-        return self._grid.size
-
-    def __repr__(self) -> str:
-        """
-        Отладочное представление сетки
-        :return: строковое представление
-        """
-        return str(self._grid)
+from utils import PiecewiseFunction, BoundaryConditions, Grid
 
 
 class BoundaryValueProblem:
@@ -116,58 +79,71 @@ class BoundaryValueProblem:
         Решает задачу численным методом
         :return: кортеж, где первый элемент - сетка, а второй значение функции в её узлах
         """
-        x = self._grid
-        h = x.h()
+        h = self._grid.h()
 
-        a = lambda i: self._k(x[i] + h / 2)
-        c = lambda i: self._k(x[i] - h / 2)
-        b = lambda i: -(a(i) + c(i) + self._q(x[i]) * h ** 2)
-        d = lambda i: -self._f(x[i]) * h ** 2
+        a = lambda i: self._k(self._grid[i] + h / 2)
+        c = lambda i: self._k(self._grid[i] - h / 2)
+        b = lambda i: -(a(i) + c(i) + self._q(self._grid[i]) * h ** 2)
+        d = lambda i: -self._f(self._grid[i]) * h ** 2
 
+        alpha, beta = self._forward_walk(a, b, c, d)
+
+        u = self._initialize_solution(alpha, beta)
+
+        self._backward_walk(alpha, beta, u)
+
+        return self._grid, u
+
+    def _backward_walk(self, alpha, beta, u):
         l_a = self._grid.find_pos(self._x_0)
 
+        for i in range(l_a - 2, 0, -1):
+            u[i] = alpha[i] * u[i + 1] + beta[i]
+
         n = len(self._grid)
+        for i in range(l_a + 2, n - 1):
+            u[i] = alpha[i] * u[i - 1] + beta[i]
+
+        u[0] = self._boundary.get_condition(0)
+        u[-1] = self._boundary.get_condition(1)
+
+    def _initialize_solution(self, alpha, beta):
+        n = len(self._grid)
+        u = np.zeros(n)
+
+        l_a = self._grid.find_pos(self._x_0)
+        k_a = self._k.get_function(0)(self._grid[l_a])
+        k_b = self._k.get_function(1)(self._grid[l_a])
+        u[l_a] = (k_a * beta[l_a - 1] + k_b * beta[l_a + 2]) / (k_a * (1 - alpha[l_a - 1]) + k_b * (1 - alpha[l_a + 2]))
+        u[l_a + 1] = u[l_a]
+        u[l_a - 1] = alpha[l_a - 1] * u[l_a] + beta[l_a - 1]
+        u[l_a + 2] = alpha[l_a + 2] * u[l_a + 1] + beta[l_a + 2]
+        return u
+
+    def _forward_walk(self, a, b, c, d):
+        n = len(self._grid)
+
         alpha = np.zeros(n)
         beta = np.zeros(n)
 
         alpha[1] = - a(1) / b(1)
         beta[1] = (d(1) - c(1) * self._boundary.get_condition(0)) / b(1)
 
+        l_a = self._grid.find_pos(self._x_0)
         for i in range(2, l_a):
             alpha[i] = - a(i) / (b(i) + c(i) * alpha[i - 1])
             beta[i] = (d(i) - c(i) * beta[i - 1]) / (b(i) + c(i) * alpha[i - 1])
-
         alpha[n - 2] = - c(n - 2) / b(n - 2)
         beta[n - 2] = (d(n - 2) - c(n - 2) * self._boundary.get_condition(1)) / b(n - 2)
+
         for i in range(n - 3, l_a + 1, -1):
             alpha[i] = - c(i) / (b(i) + a(i) * alpha[i + 1])
             beta[i] = (d(i) - a(i) * beta[i + 1]) / (b(i) + a(i) * alpha[i + 1])
-
-        u = np.zeros(n)
-        k_a = lambda i: self._k.get_function(0)(x[i])
-        k_b = lambda i: self._k.get_function(1)(x[i])
-
-        u[l_a] = (k_a(l_a) * beta[l_a - 1] + k_b(l_a) * beta[l_a + 2]) / (
-        k_a(l_a) * (1 - alpha[l_a - 1]) + k_b(l_a) * (1 - alpha[l_a + 2]))
-
-        u[l_a + 1] = u[l_a]
-
-        u[l_a - 1] = alpha[l_a - 1] * u[l_a] + beta[l_a - 1]
-        u[l_a + 2] = alpha[l_a + 2] * u[l_a + 1] + beta[l_a + 2]
-
-        for i in range(l_a - 2, 0, -1):
-            u[i] = alpha[i] * u[i + 1] + beta[i]
-
-        for i in range(l_a + 2, n - 1):
-            u[i] = alpha[i] * u[i - 1] + beta[i]
-
-        u[0] = self._boundary.get_condition(0)
-        u[-1] = self._boundary.get_condition(1)
-        return self._grid, u
+        return alpha, beta
 
 
 def solve_real_problem():
-    grid = Grid(0, 1, 101)
+    grid = Grid(0, 1, 11)
     x_0 = 1 / np.math.sqrt(2)
     k_function = PiecewiseFunction(x_0,
                                    lambda x: exp(sin(x)),
@@ -217,4 +193,4 @@ def solve_model_problem_twice():
 
 if __name__ == '__main__':
     solve_real_problem()
-    # solve_model_problem_twice()
+    solve_model_problem_twice()
